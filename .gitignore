@@ -1,0 +1,10 @@
+node_modules/
+dist/
+references/
+textures/
+blender/
+*.zip
+
+.DS_Store
+Thumbs.db
+desktop.ini

@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#07080b">
+<meta name="description" content="Nikon Z30 交互式 3D 结构拆解：34 个部件、9 步拆解、3 支可换镜头与 2 个可拆装配件。">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Nikon Z30 · 3D 结构拆解">
+<meta property="og:description" content="拖一拖，拆开看：可换镜头、可拆配件、逐层爆炸图。">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 64 64%27%3E%3Crect width=%2764%27 height=%2764%27 rx=%2714%27 fill=%27%23ffd60a%27/%3E%3Ctext x=%2732%27 y=%2746%27 font-family=%27Arial%27 font-size=%2742%27 font-weight=%27700%27 text-anchor=%27middle%27 fill=%27%23111%27%3EZ%3C/text%3E%3C/svg%3E">
+<title>Nikon Z30 · 结构拆解 | 3D Exploded View</title>
+<style>/*__CSS__*/</style>
+</head>
+<body>
+<div id="stage">
+  <div class="cy-sky"></div>
+  <div class="cy-sun"></div>
+  <div class="cy-grid"></div>
+  <div class="cy-horizon"></div>
+  <canvas id="c"></canvas>
+</div>
+<svg id="leaders" aria-hidden="true"></svg>
+<div id="labels"></div>
+<div id="vignette"></div>
+<div id="hud" aria-hidden="true">
+  <i class="hc tl"></i><i class="hc tr"></i><i class="hc bl"></i><i class="hc br"></i>
+  <div class="hud-code">SYS // Z30 <b>34</b> MODULES · NIGHT CITY</div>
+</div>
+
+<header id="topbar">
+  <div class="brand">
+    <div class="nikon">NIKON</div>
+    <div class="model">Z 30<span>结构拆解</span></div>
+  </div>
+  <div class="gear" id="lensPick">
+    <span class="glabel">镜头</span>
+    <button data-lens="dx1650" class="on" title="NIKKOR Z DX 16-50mm f/3.5-6.3 VR">16–50</button>
+    <button data-lens="dx50250" title="NIKKOR Z DX 50-250mm f/4.5-6.3 VR">50–250</button>
+    <button data-lens="z2470" title="NIKKOR Z 24-70mm f/4 S">24–70 S</button>
+    <button data-lens="none" title="取下镜头，查看卡口与 CMOS">无镜头</button>
+  </div>
+  <div class="gear" id="capPick">
+    <span class="glabel">机身盖</span>
+    <button data-cap="off" class="on">无</button>
+    <button data-cap="on">装上</button>
+  </div>
+  <div class="gear" id="accPick">
+    <span class="glabel">配件</span>
+    <button data-acc="none" class="on">无</button>
+    <button data-acc="flash">闪光灯</button>
+    <button data-acc="topmic">麦克风</button>
+  </div>
+  <div class="tools">
+    <button class="tool" data-act="catalog">目录</button>
+    <button class="tool" data-act="xray">透视</button>
+    <button class="tool on" data-act="labels">标注</button>
+    <button class="tool on" data-act="spin">旋转</button>
+    <button class="tool" data-act="gesture">手势</button>
+    <button class="tool" data-act="reset">复位</button>
+    <button class="tool help" data-act="help" title="使用说明">?</button>
+  </div>
+</header>
+
+<aside id="catalog" class="panel">
+  <div class="p-head"><span>部件目录</span><span class="count" id="partCount">32</span></div>
+  <div class="p-body" id="catalogBody"></div>
+  <div class="p-foot">点击部件 · 查看功能与拆装要点</div>
+</aside>
+
+<aside id="info" class="panel">
+  <div class="p-body" id="infoBody"></div>
+</aside>
+
+<footer id="dock">
+  <div class="dock-left">
+    <div class="step-meta">
+      <div class="kicker">STEP <b id="stepNo">01</b> <i>/ 09</i></div>
+      <div class="step-title" id="stepTitle">整机巡视</div>
+    </div>
+    <div class="rail" id="stepRail"></div>
+  </div>
+  <div class="dock-right">
+    <div class="explode">
+      <div class="ex-label"><span>分解程度</span><b id="explodeVal">0%</b></div>
+      <input id="explodeRange" type="range" min="0" max="1000" value="0" aria-label="分解程度">
+    </div>
+    <div class="nav">
+      <button id="prevStep" title="上一步">←</button>
+      <button id="nextStep" title="下一步">→</button>
+    </div>
+  </div>
+</footer>
+
+<div id="tip"></div>
+
+<div id="gesture" class="gesture">
+  <div class="g-head">
+    <span>手势控制</span><b id="gStatus">待机</b>
+    <button id="gClose" title="关闭手势">×</button>
+  </div>
+  <div class="g-body">
+    <div class="g-state">
+      <div class="g-command" id="gCommand">等待右手</div>
+      <div class="g-sub" id="gSub">右手入镜 · 挥动或画圈</div>
+      <div class="g-compass" id="gCompass">
+        <i data-d="circle">↻</i><i data-d="left">←</i><i data-d="right">→</i><i data-d="down">↓</i>
+      </div>
+    </div>
+    <div class="g-guide">
+      <div data-g="left"><i>👈</i><span><b>右手向左挥</b>放大</span></div>
+      <div data-g="right"><i>👉</i><span><b>右手向右挥</b>缩小</span></div>
+      <div data-g="down"><i>👇</i><span><b>右手向下挥</b>拆解</span></div>
+      <div data-g="circle"><i>🌀</i><span><b>手指画圈</b>旋转</span></div>
+    </div>
+  </div>
+  <div class="g-foot" id="gFoot">摄像头仅在本机识别手部，不显示、不上传画面。</div>
+</div>
+
+<div id="boot">
+  <div class="boot-inner">
+    <div class="boot-logo">NIKON <b>Z 30</b></div>
+    <div class="boot-sub">正在装配机身、镜头与卡口</div>
+    <div class="boot-bar"><i id="bootBar"></i></div>
+    <div class="boot-count" id="bootCount">0 / 32</div>
+  </div>
+</div>
+
+<div id="welcome" class="welcome">
+  <div class="w-card">
+    <div class="w-kicker">NIKON Z 30 · 3D EXPLODED VIEW</div>
+    <h1>拆开看看。</h1>
+    <p class="w-sub">34 个部件、9 步拆解、3 支可换镜头和 2 个可拆装配件。拖一拖，点一点。</p>
+    <div class="w-grid">
+      <div><b>01 看</b><span>左键拖动旋转<br>滚轮缩放<br>右键拖动平移</span></div>
+      <div><b>02 拆</b><span>底部 01–09 切换步骤<br>拖动“分解程度”<br>连续爆炸</span></div>
+      <div><b>03 换</b><span>顶部“镜头 / 配件”<br>随时换装<br>自动重新构图</span></div>
+    </div>
+    <div class="w-foot">点击任意部件查看功能与参数；开启「手势」可用摄像头控制。</div>
+    <button id="welcomeGo" class="w-btn">开始探索</button>
+    <div class="w-note">教学示意模型 · 非官方维修手册</div>
+  </div>
+</div>
+
+<div id="fatal"></div>
+
+<script>
+window.addEventListener('error', function (e) {
+  var f = document.getElementById('fatal');
+  if (f) { f.style.display = 'block'; f.textContent = '初始化失败：' + (e.message || e.error); }
+});
+</script>
+<script type="module">
+/*__THREE__*/
+/*__APP__*/
+</script>
+</body>
+</html>
