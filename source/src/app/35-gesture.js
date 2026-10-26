@@ -412,7 +412,7 @@ function runGestureTest() {
   const apart2 = analyzeHand(synthHand('open', 0.78));
   const dClose = Math.hypot(together.palm.x - together2.palm.x, together.palm.y - together2.palm.y);
   const dFar = Math.hypot(apart.palm.x - apart2.palm.x, apart.palm.y - apart2.palm.y);
-  const two = dClose < 0.14 ? '合拢' : dFar > 0.30 ? '分开' : '中间';
+  const two = `合${dClose < 0.14 ? '✓' : '×'} 分${dFar > 0.30 ? '✓' : '×'}`;
   setCommand('自检完成', '4 项规则已通过');
   const foot = gEl('gFoot');
   if (foot) foot.textContent = `张开${open.open ? '✓' : '×'} · 拳头${fist.fist ? '✓' : '×'} · 食指${point.point ? '✓' : '×'} · 双掌${two}`;
