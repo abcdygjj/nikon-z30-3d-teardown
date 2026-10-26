@@ -4025,6 +4025,20 @@ const G = {
   lastIdle: '',
 };
 
+const GS = {
+  stable: 1,
+  zoomCooldown: 280,
+  slideWindow: 260,
+  slideMin: 0.055,
+  slideCooldown: 320,
+  twoClose: 0.18,
+  twoFar: 0.24,
+  twoCooldown: 450,
+  sendMs: 40,
+  detectConf: 0.45,
+  trackConf: 0.40,
+};
+
 const MP_VERSION = '0.4.1675469240';
 const MP_BASES = [
   `https://cdn.jsdelivr.net/npm/@mediapipe/hands@${MP_VERSION}/`,
@@ -4084,8 +4098,8 @@ async function loadMediaPipe() {
       hands.setOptions({
         maxNumHands: 2,
         modelComplexity: 1,
-        minDetectionConfidence: 0.6,
-        minTrackingConfidence: 0.6,
+        minDetectionConfidence: GS.detectConf,
+        minTrackingConfidence: GS.trackConf,
       });
       hands.onResults(onHandsResults);
       G.mpBase = base;
@@ -4203,7 +4217,7 @@ function toggleGesture() {
 async function pump() {
   if (!G.on) return;
   const now = performance.now();
-  if (!G.busy && G.video && G.video.readyState >= 2 && now - G.lastSend > 55) {
+  if (!G.busy && G.video && G.video.readyState >= 2 && now - G.lastSend > GS.sendMs) {
     G.busy = true;
     G.lastSend = now;
     try {
@@ -4238,21 +4252,21 @@ function handleHands(hs, now) {
 
     if (a.open && b.open) {
       const d = Math.hypot(a.palm.x - b.palm.x, a.palm.y - b.palm.y);
-      const close = d < 0.14;
-      const far = d > 0.30;
+      const close = d < GS.twoClose;
+      const far = d > GS.twoFar;
       if (G.twoState === null) {
         G.twoState = close ? 'together' : far ? 'apart' : null;
         idle('双掌已识别', '合拢 → 分开 拆解 · 分开 → 合拢 复原');
         return;
       }
-      if (G.twoState === 'together' && far && now - G.lastTwo > 800) {
+      if (G.twoState === 'together' && far && now - G.lastTwo > GS.twoCooldown) {
         gestureExplode(0.35);
         flash('explode', '双掌分开 · 拆解', '分解程度 +35%');
         G.twoState = 'apart';
         G.lastTwo = now;
         return;
       }
-      if (G.twoState === 'apart' && close && now - G.lastTwo > 800) {
+      if (G.twoState === 'apart' && close && now - G.lastTwo > GS.twoCooldown) {
         gestureExplode(-1);
         flash('restore', '双掌合拢 · 复原', '回到整机状态');
         G.twoState = 'together';
@@ -4304,7 +4318,7 @@ function analyzeHand(lms) {
   return {
     open: count >= 3,
     fist: count <= 1,
-    point: ext[0] && !ext[1] && !ext[2] && !ext[3],
+    point: ext[0] && !ext[1] && !ext[2],
     count,
     palm: { x: 1 - px / palmIds.length, y: py / palmIds.length },
     span: dist(lms[0], lms[9]),
@@ -4317,17 +4331,16 @@ function updateZoom(a, now) {
   if (!cls) return;
   if (cls !== G.pendingCls) {
     G.pendingCls = cls;
-    G.pendingN = 1;
-    return;
+    G.pendingN = 0;
   }
   G.pendingN++;
-  if (G.pendingN < 2) return;
+  if (G.pendingN < GS.stable) return;
   if (G.zoomState === null) {
     G.zoomState = cls;
     return;
   }
   if (cls === G.zoomState) return;
-  if (now - G.lastZoom < 650) return;
+  if (now - G.lastZoom < GS.zoomCooldown) return;
   if (G.zoomState === 'fist' && cls === 'open') {
     gestureZoom(0.78);
     flash('in', '握拳 → 张开 · 放大', '画面拉近');
@@ -4345,13 +4358,13 @@ function updateSlide(a, now) {
     return;
   }
   G.tipHist.push({ t: now, x: a.tip.x, y: a.tip.y });
-  while (G.tipHist.length && now - G.tipHist[0].t > 340) G.tipHist.shift();
-  if (G.tipHist.length < 3 || now - G.lastRotate < 500) return;
+  while (G.tipHist.length && now - G.tipHist[0].t > GS.slideWindow) G.tipHist.shift();
+  if (G.tipHist.length < 3 || now - G.lastRotate < GS.slideCooldown) return;
   const first = G.tipHist[0];
   const last = G.tipHist[G.tipHist.length - 1];
   const dx = last.x - first.x;
   const dy = last.y - first.y;
-  if (Math.abs(dx) > 0.09 && Math.abs(dx) > Math.abs(dy) * 1.2) {
+  if (Math.abs(dx) > GS.slideMin && Math.abs(dx) > Math.abs(dy)) {
     gestureRotate(dx < 0 ? -0.45 : 0.45);
     flash('rotate', dx < 0 ? '食指左滑 · 旋转' : '食指右滑 · 旋转', '模型跟着转动');
     G.lastRotate = now;
@@ -4405,7 +4418,7 @@ function runGestureTest() {
   const apart2 = analyzeHand(synthHand('open', 0.78));
   const dClose = Math.hypot(together.palm.x - together2.palm.x, together.palm.y - together2.palm.y);
   const dFar = Math.hypot(apart.palm.x - apart2.palm.x, apart.palm.y - apart2.palm.y);
-  const two = `合${dClose < 0.14 ? '✓' : '×'} 分${dFar > 0.30 ? '✓' : '×'}`;
+  const two = `合${dClose < GS.twoClose ? '✓' : '×'} 分${dFar > GS.twoFar ? '✓' : '×'}`;
   setCommand('自检完成', '4 项规则已通过');
   const foot = gEl('gFoot');
   if (foot) foot.textContent = `张开${open.open ? '✓' : '×'} · 拳头${fist.fist ? '✓' : '×'} · 食指${point.point ? '✓' : '×'} · 双掌${two}`;
