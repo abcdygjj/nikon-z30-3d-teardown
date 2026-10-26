@@ -62,7 +62,7 @@
 
 ![手势面板](screenshots/gestures.jpg)
 
-> 需要 `https` 或 `localhost`。MediaPipe 资源从 CDN 加载（jsDelivr → unpkg），摄像头帧仅在本机处理；GitHub Pages 可直接使用。
+> 需要 `https` 或 `localhost`。MediaPipe 资源从 CDN 加载（jsDelivr → unpkg）；如网络不通，可把 `@mediapipe/hands` 的 `hands.js` 与 assets 放到 `./mediapipe/`。摄像头帧仅在本机处理；GitHub Pages 可直接使用。
 
 ## 单件视图
 
