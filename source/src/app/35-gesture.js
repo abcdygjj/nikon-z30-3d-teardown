@@ -35,9 +35,9 @@ const G = {
 const GS = {
   stable: 1,
   zoomCooldown: 280,
-  slideWindow: 260,
-  slideMin: 0.055,
-  slideCooldown: 320,
+  slideWindow: 200,
+  slideMin: 0.028,
+  slideCooldown: 200,
   twoClose: 0.18,
   twoFar: 0.24,
   twoCooldown: 450,
@@ -318,6 +318,7 @@ function analyzeHand(lms) {
   const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
   const ext = [[8, 6], [12, 10], [16, 14], [20, 18]].map(([tip, pip]) =>
     dist(lms[tip], w) > dist(lms[pip], w) * 1.12);
+  const indexOut = dist(lms[8], w) > dist(lms[6], w) * 1.06;
   const count = ext.filter(Boolean).length;
   const palmIds = [0, 5, 9, 13, 17];
   let px = 0, py = 0;
@@ -325,7 +326,7 @@ function analyzeHand(lms) {
   return {
     open: count >= 3,
     fist: count <= 1,
-    point: ext[0] && !ext[1] && !ext[2],
+    point: indexOut && !ext[1],
     count,
     palm: { x: 1 - px / palmIds.length, y: py / palmIds.length },
     span: dist(lms[0], lms[9]),
