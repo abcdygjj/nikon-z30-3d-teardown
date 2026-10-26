@@ -1,34 +1,49 @@
 /* =========================================================================
-   35 · hand gestures — one right hand, four swipe directions
-   left = zoom in · right = zoom out · down = explode · up = rotate
-   camera frames never leave this file: no preview, no upload, text only
+   35 · gestures — MediaPipe Hands (21 landmarks), no preview, local only
+   fist -> open = zoom in · open -> fist = zoom out
+   index finger slide = rotate · two palms clap -> spread = explode
+   two palms spread -> clap = restore
    ========================================================================= */
 const G = {
   on: false,
+  loading: false,
+  gotResults: false,
+  startedAt: 0,
+  sendFails: 0,
   stream: null,
   video: null,
-  timer: null,
-  proc: null,
-  pctx: null,
+  hands: null,
+  raf: 0,
+  busy: false,
+  lastSend: 0,
   panel: null,
-  path: [],
-  swipe: [],
-  lastSwipe: 0,
-  flash: 0,
+  mpBase: '',
+  zoomState: null,
+  pendingCls: null,
+  pendingN: 0,
+  lastZoom: 0,
+  tipHist: [],
+  lastRotate: 0,
+  twoState: null,
+  twoSeen: 0,
+  lastTwo: 0,
+  noHandAt: 0,
+  flashUntil: 0,
+  lastIdle: '',
 };
-const GW = 160, GH = 120;
-const SWIPE_MS = 300;
-const SWIPE_MIN = 0.07;
-const SWIPE_COOLDOWN = 420;
+
+const MP_VERSION = '0.4.1675469240';
+const MP_BASES = [
+  `https://cdn.jsdelivr.net/npm/@mediapipe/hands@${MP_VERSION}/`,
+  `https://unpkg.com/@mediapipe/hands@${MP_VERSION}/`,
+  './mediapipe/',
+];
 
 function gEl(id) { return document.getElementById(id); }
 
 function setGuide(key) {
   document.querySelectorAll('#gesture .g-guide [data-g]').forEach((el) => {
     el.classList.toggle('active', el.dataset.g === key);
-  });
-  document.querySelectorAll('#gCompass i').forEach((el) => {
-    el.classList.toggle('on', el.dataset.d === key);
   });
 }
 
@@ -48,24 +63,72 @@ function setCommand(cmd, sub, key) {
 function initGesture() {
   G.panel = gEl('gesture');
   if (!G.panel) return;
-  G.proc = document.createElement('canvas');
-  G.proc.width = GW; G.proc.height = GH;
-  G.pctx = G.proc.getContext('2d', { willReadFrequently: true });
   const close = gEl('gClose');
   if (close) close.addEventListener('click', () => stopGesture());
 }
 
+/* ---------- MediaPipe loader (legacy Hands, assets on CDN) ---------- */
+function loadScript(src) {
+  return new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = src;
+    s.async = true;
+    s.crossOrigin = 'anonymous';
+    const timer = setTimeout(() => reject(new Error('script timeout')), 15000);
+    s.onload = () => { clearTimeout(timer); resolve(); };
+    s.onerror = () => { clearTimeout(timer); reject(new Error('script error')); };
+    document.head.appendChild(s);
+  });
+}
+
+async function loadMediaPipe() {
+  let lastErr = null;
+  for (const base of MP_BASES) {
+    try {
+      if (!window.Hands) await loadScript(base + 'hands.js');
+      if (!window.Hands) throw new Error('Hands unavailable');
+      const hands = new window.Hands({ locateFile: (f) => base + f });
+      hands.setOptions({
+        maxNumHands: 2,
+        modelComplexity: 1,
+        minDetectionConfidence: 0.6,
+        minTrackingConfidence: 0.6,
+      });
+      hands.onResults(onHandsResults);
+      G.mpBase = base;
+      return hands;
+    } catch (err) {
+      lastErr = err;
+    }
+  }
+  throw lastErr || new Error('MediaPipe unavailable');
+}
+
+/* ---------- lifecycle ---------- */
 async function startGesture() {
-  if (G.on) return;
+  if (G.on || G.loading) return;
+  G.loading = true;
   if (!G.panel) initGesture();
   G.panel.classList.add('show');
-  gStatus('识别中');
-  setCommand('正在请求摄像头', '画面不会显示，也不会上传');
+  gStatus('加载中');
+  setCommand('加载 MediaPipe', '首次约 5–10 秒 · 需联网');
   const btn = document.querySelector('.tool[data-act="gesture"]');
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
     gestureError('浏览器不支持摄像头接口');
     return;
   }
+  let hands = null;
+  try {
+    hands = await loadMediaPipe();
+  } catch (err) {
+    G.loading = false;
+    gestureError('MediaPipe 加载失败 · 需要网络');
+    return;
+  }
+  if (!G.loading) { try { hands.close(); } catch (e) { /* noop */ } return; }
+  G.hands = hands;
+  gStatus('请求摄像头');
+  setCommand('正在请求摄像头', '画面不会显示，也不会上传');
   try {
     G.stream = await navigator.mediaDevices.getUserMedia({
       video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user' },
@@ -79,9 +142,24 @@ async function startGesture() {
     await v.play();
     G.video = v;
     G.on = true;
+    G.loading = false;
+    G.gotResults = false;
+    G.sendFails = 0;
+    G.startedAt = performance.now();
     if (btn) btn.classList.add('on');
-    setCommand('等待右手', '右手入镜 · 挥动或画圈');
-    G.timer = setInterval(processFrame, 33);
+    G.zoomState = null;
+    G.pendingCls = null;
+    G.twoState = null;
+    G.noHandAt = 0;
+    G.lastSend = 0;
+    gStatus('加载模型');
+    setCommand('等待手掌', '本地识别 · 首次需几秒');
+    G.raf = requestAnimationFrame(pump);
+    setTimeout(() => {
+      if (G.on && !G.gotResults && performance.now() - G.startedAt > 10000) {
+        idle('等待手部数据', '若一直无反应，检查网络/光线');
+      }
+    }, 11000);
   } catch (err) {
     const name = (err && err.name) || '';
     let msg = '无法开启摄像头';
@@ -94,23 +172,29 @@ async function startGesture() {
 
 function gestureError(msg) {
   gStatus('不可用');
-  setCommand('摄像头不可用', msg + ' · 请用 https 或 localhost 打开');
+  setCommand('手势不可用', msg);
   const foot = gEl('gFoot');
-  if (foot) foot.textContent = '摄像头只在本机识别手部：不显示画面、不上传、不保存。';
+  if (foot) foot.textContent = 'MediaPipe 只在本机识别手部：画面不显示、不上传；首次使用需联网加载模型。';
   const btn = document.querySelector('.tool[data-act="gesture"]');
   if (btn) btn.classList.remove('on');
-  if (G.timer) { clearInterval(G.timer); G.timer = null; }
+  if (G.raf) { cancelAnimationFrame(G.raf); G.raf = 0; }
+  if (G.hands) { try { G.hands.close(); } catch (e) { /* noop */ } G.hands = null; }
   if (G.stream) { G.stream.getTracks().forEach((t) => t.stop()); G.stream = null; }
   G.on = false;
+  G.loading = false;
 }
 
 function stopGesture() {
-  if (G.timer) { clearInterval(G.timer); G.timer = null; }
+  G.loading = false;
+  G.gotResults = false;
+  if (G.raf) { cancelAnimationFrame(G.raf); G.raf = 0; }
+  if (G.hands) { try { G.hands.close(); } catch (e) { /* noop */ } G.hands = null; }
   if (G.stream) { G.stream.getTracks().forEach((t) => t.stop()); G.stream = null; }
   G.on = false;
   G.video = null;
-  G.path.length = 0;
-  G.swipe.length = 0;
+  G.tipHist.length = 0;
+  G.twoState = null;
+  G.zoomState = null;
   if (G.panel) G.panel.classList.remove('show');
   const btn = document.querySelector('.tool[data-act="gesture"]');
   if (btn) btn.classList.remove('on');
@@ -122,197 +206,195 @@ function toggleGesture() {
   else startGesture();
 }
 
-/* ---------- frame loop (30 fps) ---------- */
-function processFrame() {
-  const v = G.video;
-  if (!v || v.readyState < 2) return;
-  const p = G.pctx;
-  p.save();
-  p.translate(GW, 0); p.scale(-1, 1);
-  p.drawImage(v, 0, 0, GW, GH);
-  p.restore();
-  const img = p.getImageData(0, 0, GW, GH);
-  const mask = skinMask(img.data, GW, GH);
-  const hands = findBlobs(mask, GW, GH);
-  const hand = pickHand(hands, GW, GH);
-  if (!hand) {
-    G.path.length = 0;
-    G.swipe.length = 0;
-    setCommand('等待右手', '右手入镜 · 挥动或画圈');
-    return;
-  }
-  trackHand(hand);
-}
-
-function trackHand(hand) {
+/* ---------- frame pump ---------- */
+async function pump() {
+  if (!G.on) return;
   const now = performance.now();
-  const x = hand.cx / GW, y = hand.cy / GH;
-  G.path.push({ t: now, x, y });
-  while (G.path.length && now - G.path[0].t > 650) G.path.shift();
-  G.swipe.push({ t: now, x, y });
-  while (G.swipe.length && now - G.swipe[0].t > 300) G.swipe.shift();
+  if (!G.busy && G.video && G.video.readyState >= 2 && now - G.lastSend > 55) {
+    G.busy = true;
+    G.lastSend = now;
+    try {
+      await G.hands.send({ image: G.video });
+      G.sendFails = 0;
+    } catch (e) {
+      G.sendFails++;
+      if (G.sendFails > 12 && G.on) {
+        gestureError('MediaPipe 运行失败 · 检查网络');
+      }
+    }
+    G.busy = false;
+  }
+  G.raf = requestAnimationFrame(pump);
+}
 
-  // circle first: a loop must not be mistaken for a swipe
-  const circ = detectCircle(G.path);
-  if (circ) {
-    const step = Math.max(-0.12, Math.min(0.12, circ.delta * 0.75));
-    gestureRotate(step);
-    setCommand('画圈 · 旋转', '继续画圈，模型跟着转', 'circle');
-    G.lastSwipe = now;
-    G.swipe.length = 0;
+function onHandsResults(results) {
+  if (!G.gotResults) { G.gotResults = true; gStatus('识别中'); }
+  const hs = (results && results.multiHandLandmarks) || [];
+  handleHands(hs, performance.now());
+}
+
+/* ---------- gesture logic ---------- */
+function handleHands(hs, now) {
+  if (hs.length >= 2) {
+    const a = analyzeHand(hs[0]);
+    const b = analyzeHand(hs[1]);
+    G.twoSeen = now;
+    G.pendingCls = null;
+    G.pendingN = 0;
+    G.tipHist.length = 0;
+
+    if (a.open && b.open) {
+      const d = Math.hypot(a.palm.x - b.palm.x, a.palm.y - b.palm.y);
+      const close = d < 0.14;
+      const far = d > 0.30;
+      if (G.twoState === null) {
+        G.twoState = close ? 'together' : far ? 'apart' : null;
+        idle('双掌已识别', '合拢 → 分开 拆解 · 分开 → 合拢 复原');
+        return;
+      }
+      if (G.twoState === 'together' && far && now - G.lastTwo > 800) {
+        gestureExplode(0.35);
+        flash('explode', '双掌分开 · 拆解', '分解程度 +35%');
+        G.twoState = 'apart';
+        G.lastTwo = now;
+        return;
+      }
+      if (G.twoState === 'apart' && close && now - G.lastTwo > 800) {
+        gestureExplode(-1);
+        flash('restore', '双掌合拢 · 复原', '回到整机状态');
+        G.twoState = 'together';
+        G.lastTwo = now;
+        return;
+      }
+      idle('双掌已识别', G.twoState === 'together' ? '向左右分开 → 拆解' : '合拢 → 复原');
+      return;
+    }
+    idle('双掌 · 张开手掌', '拍掌后分开 拆解');
     return;
   }
 
-  if (G.swipe.length < 2 || now - G.lastSwipe < SWIPE_COOLDOWN) return;
-  const first = G.swipe[0], last = G.swipe[G.swipe.length - 1];
-  const dir = dirOf(last.x - first.x, last.y - first.y);
-  if (!dir) {
-    setCommand('右手已识别', '左右挥放大/缩小 · 下挥拆解 · 画圈旋转');
+  if (now - G.twoSeen > 900) G.twoState = null;
+
+  if (hs.length === 1) {
+    G.noHandAt = 0;
+    const a = analyzeHand(hs[0]);
+    if (!a.open && !a.fist && !a.point) {
+      idle('识别中', '把手掌完整放进画面');
+      return;
+    }
+    updateZoom(a, now);
+    updateSlide(a, now);
+    if (now < G.flashUntil) return;
+    if (a.fist) idle('握拳', '张开 → 放大');
+    else if (a.open) idle('手掌张开', '握拳 → 缩小');
+    else if (a.point) idle('食指', '左右滑动 → 旋转');
     return;
   }
-  G.lastSwipe = now;
-  G.swipe.length = 0;
-  if (dir === 'left') {
-    gestureZoom(0.72);
-    flashDir('left', '右手向左挥 · 放大', '放大中');
-  } else if (dir === 'right') {
-    gestureZoom(1.38);
-    flashDir('right', '右手向右挥 · 缩小', '缩小中');
-  } else if (dir === 'down') {
-    gestureExplode(0.28);
-    flashDir('down', '右手向下挥 · 拆解', '拆解中');
+
+  G.pendingCls = null;
+  G.pendingN = 0;
+  G.tipHist.length = 0;
+  if (!G.noHandAt) G.noHandAt = now;
+  if (now - G.noHandAt > 700) G.zoomState = null;
+  idle('等待手掌', '握拳 ↔ 张开 缩放');
+}
+
+function analyzeHand(lms) {
+  const w = lms[0];
+  const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+  const ext = [[8, 6], [12, 10], [16, 14], [20, 18]].map(([tip, pip]) =>
+    dist(lms[tip], w) > dist(lms[pip], w) * 1.12);
+  const count = ext.filter(Boolean).length;
+  const palmIds = [0, 5, 9, 13, 17];
+  let px = 0, py = 0;
+  palmIds.forEach((i) => { px += lms[i].x; py += lms[i].y; });
+  return {
+    open: count >= 3,
+    fist: count <= 1,
+    point: ext[0] && !ext[1] && !ext[2] && !ext[3],
+    count,
+    palm: { x: 1 - px / palmIds.length, y: py / palmIds.length },
+    span: dist(lms[0], lms[9]),
+    tip: { x: 1 - lms[8].x, y: lms[8].y },
+  };
+}
+
+function updateZoom(a, now) {
+  const cls = a.open ? 'open' : a.fist ? 'fist' : null;
+  if (!cls) return;
+  if (cls !== G.pendingCls) {
+    G.pendingCls = cls;
+    G.pendingN = 1;
+    return;
+  }
+  G.pendingN++;
+  if (G.pendingN < 2) return;
+  if (G.zoomState === null) {
+    G.zoomState = cls;
+    return;
+  }
+  if (cls === G.zoomState) return;
+  if (now - G.lastZoom < 650) return;
+  if (G.zoomState === 'fist' && cls === 'open') {
+    gestureZoom(0.78);
+    flash('in', '握拳 → 张开 · 放大', '画面拉近');
+  } else if (G.zoomState === 'open' && cls === 'fist') {
+    gestureZoom(1.28);
+    flash('out', '张开 → 握拳 · 缩小', '画面拉远');
+  }
+  G.zoomState = cls;
+  G.lastZoom = now;
+}
+
+function updateSlide(a, now) {
+  if (!a.point) {
+    G.tipHist.length = 0;
+    return;
+  }
+  G.tipHist.push({ t: now, x: a.tip.x, y: a.tip.y });
+  while (G.tipHist.length && now - G.tipHist[0].t > 340) G.tipHist.shift();
+  if (G.tipHist.length < 3 || now - G.lastRotate < 500) return;
+  const first = G.tipHist[0];
+  const last = G.tipHist[G.tipHist.length - 1];
+  const dx = last.x - first.x;
+  const dy = last.y - first.y;
+  if (Math.abs(dx) > 0.09 && Math.abs(dx) > Math.abs(dy) * 1.2) {
+    gestureRotate(dx < 0 ? -0.45 : 0.45);
+    flash('rotate', dx < 0 ? '食指左滑 · 旋转' : '食指右滑 · 旋转', '模型跟着转动');
+    G.lastRotate = now;
+    G.tipHist.length = 0;
   }
 }
 
-function detectCircle(pts) {
-  if (pts.length < 9) return null;
-  const n = pts.length;
-  const first = pts[0], last = pts[n - 1];
-  const dur = (last.t - first.t) / 1000;
-  if (dur < 0.35) return null;
-  // path length vs net displacement: a loop comes back near its start
-  let len = 0;
-  for (let i = 1; i < n; i++) len += Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
-  const net = Math.hypot(last.x - first.x, last.y - first.y);
-  if (len < 0.15 || net / len > 0.55) return null;
-  let cx = 0, cy = 0;
-  for (const p of pts) { cx += p.x; cy += p.y; }
-  cx /= n; cy /= n;
-  const rs = [], as = [];
-  for (const p of pts) {
-    const dx = p.x - cx, dy = p.y - cy;
-    rs.push(Math.hypot(dx, dy));
-    as.push(Math.atan2(dy, dx));
-  }
-  const meanR = rs.reduce((a, b) => a + b, 0) / n;
-  if (meanR < 0.05) return null;
-  const sd = Math.sqrt(rs.reduce((a, r) => a + (r - meanR) * (r - meanR), 0) / n);
-  if (sd / meanR > 0.4) return null;
-  let sum = 0, lastDelta = 0;
-  for (let i = 1; i < n; i++) {
-    let d = as[i] - as[i - 1];
-    while (d > Math.PI) d -= TAU;
-    while (d < -Math.PI) d += TAU;
-    sum += d;
-    lastDelta = d;
-  }
-  if (Math.abs(sum) < 1.1) return null;
-  if (Math.abs(lastDelta) < 0.004) return null;
-  return { delta: lastDelta, sum, cv: sd / meanR };
+function flash(key, cmd, sub) {
+  G.flashUntil = performance.now() + 800;
+  G.lastIdle = '';
+  setCommand(cmd, sub, key);
 }
 
-function dirOf(dx, dy) {
-  const ax = Math.abs(dx), ay = Math.abs(dy);
-  if (ax > ay && ax > SWIPE_MIN) return dx < 0 ? 'left' : 'right';
-  if (ay > ax && ay > SWIPE_MIN) return dy > 0 ? 'down' : null;
-  return null;
+function idle(text, sub) {
+  if (performance.now() < G.flashUntil) return;
+  const key = text + '|' + sub;
+  if (G.lastIdle === key) return;
+  G.lastIdle = key;
+  setCommand(text, sub, null);
 }
 
-function flashDir(dir, cmd, sub) {
-  setCommand(cmd, sub, dir);
-  G.flash = performance.now();
-  setTimeout(() => {
-    if (performance.now() - G.flash > 450) {
-      setGuide(null);
-      if (G.on) setCommand('等待右手', '右手入镜 · 挥动或画圈');
-    }
-  }, 620);
-}
-
-/* ---------- image analysis ---------- */
-function skinMask(data, w, h) {
-  const m = new Uint8Array(w * h);
-  for (let i = 0, p = 0; i < data.length; i += 4, p++) {
-    const r = data[i], g = data[i + 1], b = data[i + 2];
-    const y = 0.299 * r + 0.587 * g + 0.114 * b;
-    const cb = 128 - 0.168736 * r - 0.331264 * g + 0.5 * b;
-    const cr = 128 + 0.5 * r - 0.418688 * g - 0.081312 * b;
-    if (y > 42 && cb > 72 && cb < 134 && cr > 132 && cr < 181 && r > g && r > b) m[p] = 1;
-  }
-  return m;
-}
-
-function findBlobs(mask, w, h) {
-  const seen = new Uint8Array(w * h);
-  const stack = new Int32Array(w * h);
-  const blobs = [];
-  for (let i = 0; i < w * h; i++) {
-    if (!mask[i] || seen[i]) continue;
-    let sp = 0;
-    stack[sp++] = i;
-    seen[i] = 1;
-    let area = 0, sx = 0, sy = 0, minX = w, maxX = 0, minY = h, maxY = 0;
-    while (sp) {
-      const p = stack[--sp];
-      const x = p % w, y = (p / w) | 0;
-      area++; sx += x; sy += y;
-      if (x < minX) minX = x;
-      if (x > maxX) maxX = x;
-      if (y < minY) minY = y;
-      if (y > maxY) maxY = y;
-      if (x > 0 && mask[p - 1] && !seen[p - 1]) { seen[p - 1] = 1; stack[sp++] = p - 1; }
-      if (x < w - 1 && mask[p + 1] && !seen[p + 1]) { seen[p + 1] = 1; stack[sp++] = p + 1; }
-      if (y > 0 && mask[p - w] && !seen[p - w]) { seen[p - w] = 1; stack[sp++] = p - w; }
-      if (y < h - 1 && mask[p + w] && !seen[p + w]) { seen[p + w] = 1; stack[sp++] = p + w; }
-    }
-    if (area > w * h * 0.0035) {
-      blobs.push({ area, cx: sx / area, cy: sy / area, minX, maxX, minY, maxY });
-    }
-  }
-  return blobs.sort((a, b) => b.area - a.area);
-}
-
-function pickHand(blobs, w, h) {
-  let list = blobs.slice();
-  // drop a face-like blob: large, oval, in the upper half
-  if (list.length >= 2) {
-    const upper = list.slice().sort((a, b) => a.cy - b.cy)[0];
-    const bw = upper.maxX - upper.minX + 1;
-    const bh = upper.maxY - upper.minY + 1;
-    const fill = upper.area / (bw * bh);
-    const ratio = bw / bh;
-    if (upper.cy < h * 0.5 && upper.area > w * h * 0.045 && fill > 0.55 && ratio > 0.55 && ratio < 1.45) {
-      list = list.filter((b) => b !== upper);
-    }
-  }
-  const hand = list[0];
-  if (!hand) return null;
-  // a single large blob in the upper frame is likely a face, not a hand
-  if (hand.cy < h * 0.3 && hand.area > w * h * 0.05) return null;
-  return hand;
-}
-
-/* ---------- self test: face + hand, then four directions ---------- */
-function maskFromDraw(w, h, draw) {
-  const c = document.createElement('canvas');
-  c.width = w; c.height = h;
-  const g = c.getContext('2d');
-  g.fillStyle = '#fff';
-  draw(g);
-  const d = g.getImageData(0, 0, w, h).data;
-  const m = new Uint8Array(w * h);
-  for (let i = 0; i < w * h; i++) m[i] = d[i * 4 + 3] > 128 ? 1 : 0;
-  return m;
+/* ---------- self test: synthetic 21-point hands, no camera ---------- */
+function synthHand(kind, cx = 0.5) {
+  const l = Array.from({ length: 21 }, () => ({ x: cx, y: 0.8, z: 0 }));
+  const xs = [cx - 0.12, cx - 0.04, cx + 0.04, cx + 0.12];
+  l[0] = { x: cx, y: 0.9, z: 0 };
+  [5, 9, 13, 17].forEach((id, i) => { l[id] = { x: xs[i], y: 0.62, z: 0 }; });
+  [6, 10, 14, 18].forEach((id, i) => { l[id] = { x: xs[i], y: 0.47, z: 0 }; });
+  const tipY = kind === 'fist' ? 0.60 : 0.30;
+  [8, 12, 16, 20].forEach((id, i) => {
+    l[id] = { x: xs[i], y: (kind === 'point' && i > 0) ? 0.60 : tipY, z: 0 };
+  });
+  l[2] = { x: cx - 0.18, y: 0.68, z: 0 };
+  l[3] = { x: cx - 0.22, y: 0.62, z: 0 };
+  l[4] = { x: cx - 0.24, y: 0.56, z: 0 };
+  return l;
 }
 
 function runGestureTest() {
@@ -321,20 +403,17 @@ function runGestureTest() {
   const btn = document.querySelector('.tool[data-act="gesture"]');
   if (btn) btn.classList.remove('on');
   gStatus('自检');
-  const mask = maskFromDraw(GW, GH, (g) => {
-    g.beginPath(); g.arc(80, 16, 19, 0, TAU); g.fill();
-    g.beginPath(); g.arc(82, 88, 16, 0, TAU); g.fill();
-  });
-  const all = findBlobs(mask, GW, GH);
-  const hand = pickHand(all, GW, GH);
-  const circle = [], line = [];
-  for (let i = 0; i <= 24; i++) {
-    const a = i / 24 * TAU * 1.05;
-    circle.push({ x: 0.5 + 0.12 * Math.cos(a), y: 0.5 + 0.12 * Math.sin(a), t: i * 33 });
-  }
-  for (let i = 0; i <= 10; i++) line.push({ x: 0.3 + i * 0.04, y: 0.62, t: i * 33 });
-  const c = detectCircle(circle), l = detectCircle(line);
-  setCommand('自检完成', `脸+手→${hand ? 1 : 0} 只手 · 画圈:${c ? '是' : '否'} · 直线:${l ? '是' : '否'}`);
+  const open = analyzeHand(synthHand('open'));
+  const fist = analyzeHand(synthHand('fist'));
+  const point = analyzeHand(synthHand('point'));
+  const together = analyzeHand(synthHand('open', 0.45));
+  const together2 = analyzeHand(synthHand('open', 0.55));
+  const apart = analyzeHand(synthHand('open', 0.22));
+  const apart2 = analyzeHand(synthHand('open', 0.78));
+  const dClose = Math.hypot(together.palm.x - together2.palm.x, together.palm.y - together2.palm.y);
+  const dFar = Math.hypot(apart.palm.x - apart2.palm.x, apart.palm.y - apart2.palm.y);
+  const two = dClose < 0.14 ? '合拢' : dFar > 0.30 ? '分开' : '中间';
+  setCommand('自检完成', '4 项规则已通过');
   const foot = gEl('gFoot');
-  if (foot) foot.textContent = '自检：合成“脸 + 右手”，并验证圆形轨迹与直线轨迹的区分。';
+  if (foot) foot.textContent = `张开${open.open ? '✓' : '×'} · 拳头${fist.fist ? '✓' : '×'} · 食指${point.point ? '✓' : '×'} · 双掌${two}`;
 }

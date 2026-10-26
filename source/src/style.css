@@ -487,3 +487,26 @@ input[type=range]::-webkit-slider-thumb{background:var(--y);
   box-shadow:0 0 14px rgba(0,240,255,.3)}
 #capPick.cap-on [data-cap="off"],
 #capPick:not(.cap-on) [data-cap="on"]{background:transparent;color:var(--dim);box-shadow:none}
+
+
+/* MediaPipe gesture panel */
+.gesture{width:384px}
+.g-state{width:118px}
+.g-command{font-size:15px;min-height:34px}
+.g-badge{display:flex;align-items:center;gap:5px;margin-top:4px;font-family:Consolas,"Courier New",monospace;
+  font-size:7px;letter-spacing:.13em;color:rgba(0,240,255,.6);white-space:nowrap}
+.g-badge i{width:5px;height:5px;border-radius:50%;background:var(--cy);box-shadow:0 0 7px var(--cy);flex:none}
+.g-guide div{padding:2px 4px;gap:5px}
+.g-guide i{width:30px;font-size:11px;letter-spacing:-2px}
+.g-guide span{font-size:9.6px;line-height:1.35}
+.g-guide b{font-size:9.6px}
+.g-foot{font-size:8.5px;line-height:1.5}
+
+
+/* MediaPipe panel sizing */
+.gesture{width:400px}
+.g-state{width:132px}
+.g-command{font-size:14px}
+.g-sub{font-size:8.5px;line-height:1.5;overflow-wrap:anywhere}
+.g-guide i{width:22px;font-size:12px;letter-spacing:0}
+.g-guide span,.g-guide b{font-size:9.4px}
